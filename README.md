@@ -72,7 +72,7 @@ Closing the browser leaves everything running. After the server reboots, run `sp
 
 ### Reaching it from your laptop
 
-- **Listening on the network** (step 4) needs the least setup, but it is plain HTTP: anyone who can watch the network can read your password and your terminals. Use it only on a network you trust. Ctrl+C and Ctrl+V work, but programs cannot copy to your clipboard (OSC 52), which needs HTTPS or `localhost`.
+- **Listening on the network** (step 4) needs the least setup, but it is plain HTTP: anyone who can watch the network can read your password and your terminals. Use it only on a network you trust. Ctrl+C and Ctrl+V work, and so do copies made by programs (OSC 52) right after a key press or click, which covers Claude Code and Codex; a program copying on its own later is blocked by the browser, which allows that only on HTTPS or `localhost`.
 - **An SSH tunnel** keeps the server on 127.0.0.1 (plain `spectraweaver up`). Use the port that `up` printed:
   - **VS Code Remote-SSH** forwards the port by itself while it is connected: open the link on your laptop as it is.
   - **Otherwise, run this on your laptop** and keep it running (Windows 10 and 11 include `ssh`; use PowerShell):
@@ -97,6 +97,7 @@ Closing the browser leaves everything running. After the server reboots, run `sp
   - Windows: Ctrl+C copies when text is selected (otherwise it interrupts the program), and Ctrl+V pastes.
   - Linux: Ctrl+Shift+C and Ctrl+Shift+V.
   - macOS: Cmd+C and Cmd+V.
+  - Programs that use the mouse, such as Claude Code and Codex, select text themselves and copy it with their own keys (shown as sent to the terminal), which works. To select in the terminal instead, hold Shift while dragging (Option on macOS).
 - **Browser shortcuts:** a normal browser tab keeps Ctrl+W, Ctrl+T and Ctrl+N for itself, so they never reach the terminal. Open the page as an app window instead: launch the browser with `--app=URL` (Quick start, step 5), or, over an SSH tunnel, install the page as an app in Chrome or Edge.
 
 ## Shared servers, small or NFS home directories

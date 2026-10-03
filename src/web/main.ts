@@ -159,9 +159,32 @@ gridSelect.addEventListener("change", () => {
   if (tab && GRID_PATTERN.test(gridSelect.value)) send({ t: "tab-update", id: tab.id, grid: gridSelect.value });
 });
 new ResizeObserver(() => layoutGrid()).observe(grid);
-// Coming back to the page: the GPU may have dropped what the terminals drew meanwhile.
+// A page in the background stops receiving output after a while. Browsers throttle or
+// freeze background pages, and catching up on minutes of agent output when coming back
+// kept the terminals blank; a snapshot of each session is quicker and the same size however
+// long the page was away.
+const PAUSE_WHEN_HIDDEN_MS = 15_000;
+// After sleep the connection can be dead without the browser noticing for minutes.
+const SNAPSHOT_TIMEOUT_MS = 10_000;
+let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") for (const tile of tiles.values()) tile.terminal?.repaint();
+  clearTimeout(hiddenTimer);
+  if (document.visibilityState === "hidden") {
+    hiddenTimer = setTimeout(() => {
+      for (const tile of tiles.values()) tile.terminal?.pause();
+    }, PAUSE_WHEN_HIDDEN_MS);
+    return;
+  }
+  for (const tile of tiles.values()) {
+    tile.terminal?.resume();
+    // The GPU may also have dropped what the terminals drew.
+    tile.terminal?.repaint();
+  }
+  setTimeout(() => {
+    const views = [...tiles.values()].map((tile) => tile.terminal).filter((view) => view !== null);
+    const noneArrived = views.length > 0 && views.every((view) => view.waitingLongerThan(SNAPSHOT_TIMEOUT_MS - 500));
+    if (noneArrived && daemonUp) reconnectNow();
+  }, SNAPSHOT_TIMEOUT_MS);
 });
 window.addEventListener("hashchange", () => render());
 
@@ -300,6 +323,7 @@ class Tile {
         this.root.classList.toggle("focused", focused);
         if (focused && belled.delete(this.session.id)) render();
       },
+      notify: toast,
     });
     this.view.mount(this.body);
     send({ t: "sub", session: this.session.id });
@@ -443,10 +467,15 @@ function onOutput(bytes: Uint8Array): void {
   tiles.get(sessionId)?.terminal?.write(offset, data);
 }
 
+/** The newest connection; events from older ones are ignored. */
+let current: WebSocket | null = null;
+
 function connect(): void {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`);
+  current = ws;
   ws.binaryType = "arraybuffer";
   ws.addEventListener("open", () => {
+    if (ws !== current) return ws.close();
     socket = ws;
     connected = true;
     reconnectDelay = 250;
@@ -455,16 +484,30 @@ function connect(): void {
     for (const tile of tiles.values()) tile.terminal?.resync();
   });
   ws.addEventListener("message", (event) => {
+    if (ws !== current) return;
     if (typeof event.data === "string") onServerMessage(JSON.parse(event.data) as ServerMessage);
     else onOutput(new Uint8Array(event.data as ArrayBuffer));
   });
   ws.addEventListener("close", () => {
-    if (socket === ws) socket = null;
+    if (ws !== current) return;
+    socket = null;
     connected = false;
     setStatus();
     setTimeout(() => void reconnect(), reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 5000);
   });
+}
+
+/** Gives up on a connection that stopped answering and opens a new one right away. */
+function reconnectNow(): void {
+  const stale = current;
+  current = null;
+  socket = null;
+  connected = false;
+  setStatus();
+  stale?.close();
+  reconnectDelay = 250;
+  void reconnect();
 }
 
 async function reconnect(): Promise<void> {

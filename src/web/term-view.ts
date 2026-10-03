@@ -26,13 +26,40 @@ export interface TermViewOptions {
   useWebgl: boolean;
   send(message: ClientMessage): void;
   onFocusChange(focused: boolean): void;
+  /** Shows the user a short message. */
+  notify(message: string): void;
 }
 
-// Programs may set the clipboard (OSC 52) but never read it.
-const writeOnlyClipboard: IClipboardProvider = {
-  readText: () => "",
-  writeText: (_selection, text) => navigator.clipboard.writeText(text),
-};
+/**
+ * Puts text a program sent with OSC 52 on the clipboard: Claude Code and Codex copy this
+ * way what you select with the mouse inside them. navigator.clipboard exists only on HTTPS
+ * and localhost. Elsewhere, a copy command still works shortly after a key press or click,
+ * which is when programs answer one (Ctrl+C after selecting, or releasing the mouse).
+ */
+async function writeClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // For example, the page lost focus; try the copy command.
+    }
+  }
+  let copied = false;
+  const onCopy = (event: ClipboardEvent) => {
+    event.clipboardData?.setData("text/plain", text);
+    event.preventDefault();
+    event.stopImmediatePropagation(); // before xterm.js copies its own (empty) selection
+    copied = true;
+  };
+  window.addEventListener("copy", onCopy, { capture: true });
+  try {
+    document.execCommand("copy");
+  } finally {
+    window.removeEventListener("copy", onCopy, { capture: true });
+  }
+  return copied;
+}
 
 function openLink(uri: string): void {
   if (/^https?:\/\//i.test(uri)) window.open(uri, "_blank", "noopener,noreferrer");
@@ -53,6 +80,9 @@ export class TermView {
   private fitScheduled = false;
   private resizeObserver: ResizeObserver | null = null;
   private webgl: WebglAddon | null = null;
+  private paused = false;
+  /** When the last snapshot request went out, until the snapshot arrives. */
+  private awaitingSnapshotSince: number | null = null;
 
   constructor(private readonly options: TermViewOptions) {
     const { session } = options;
@@ -69,6 +99,9 @@ export class TermView {
       fontFamily: FONT_FAMILY,
       theme: { background: THEME.background, foreground: THEME.foreground, cursor: THEME.cursor },
       rightClickSelectsWord: options.platform === "mac",
+      // Programs that use the mouse (Claude Code, Codex) take drags for themselves; holding
+      // Shift (Option on macOS) selects in the terminal instead.
+      macOptionClickForcesSelection: true,
       linkHandler: { activate: (_event, uri) => openLink(uri), allowNonHttpProtocols: false },
     });
   }
@@ -84,7 +117,17 @@ export class TermView {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
-    if (window.isSecureContext) term.loadAddon(new ClipboardAddon(undefined, writeOnlyClipboard));
+    const forceSelection = this.options.platform === "mac" ? "Option" : "Shift";
+    const clipboard: IClipboardProvider = {
+      readText: () => "", // programs may set the clipboard, never read it
+      writeText: async (_selection, text) => {
+        if (await writeClipboard(text)) return;
+        this.options.notify(
+          `The browser blocked a program's copy. Hold ${forceSelection} while selecting to use the terminal's own selection, then copy.`,
+        );
+      },
+    };
+    term.loadAddon(new ClipboardAddon(undefined, clipboard));
     if (this.options.useWebgl) this.enableWebgl();
     suppressQueryReplies(term);
     installKeymap(term, this.options.platform, {
@@ -133,6 +176,7 @@ export class TermView {
     this.term.write(snapshot.data);
     this.expectedOffset = snapshot.offset;
     this.ready = true;
+    this.awaitingSnapshotSince = null;
   }
 
   write(offset: number, data: Uint8Array): void {
@@ -148,8 +192,29 @@ export class TermView {
   }
 
   resync(): void {
+    if (this.paused) return;
     this.ready = false;
+    this.awaitingSnapshotSince = Date.now();
     this.options.send({ t: "sub", session: this.sessionId });
+  }
+
+  /** Stops receiving output, for a page in the background; resume() catches up with a snapshot. */
+  pause(): void {
+    if (this.paused) return;
+    this.paused = true;
+    this.ready = false;
+    this.options.send({ t: "unsub", session: this.sessionId });
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.resync();
+  }
+
+  /** Whether a snapshot was asked for at least `ms` ago and has not arrived. */
+  waitingLongerThan(ms: number): boolean {
+    return this.awaitingSnapshotSince !== null && Date.now() - this.awaitingSnapshotSince > ms;
   }
 
   /**

@@ -159,6 +159,7 @@ Company home directories are often small and shared over NFS by several hosts, s
 - **One WebSocket per tab**, multiplexing every session the tab shows.
 - **Framing.** It follows the daemon protocol: binary output frames tagged with session id and offset, plus JSON control messages.
 - **Resuming.** The browser remembers the last offset per session, so a brief disconnect resumes without a full snapshot.
+- **Hidden pages pause.** After 15 seconds in the background, a page unsubscribes from its sessions, and resubscribes for snapshots when it is shown again. Browsers throttle or freeze background pages, so output piled up unparsed (xterm.js even discards writes beyond 50 MB), and catching up kept terminals blank for a long time; a snapshot costs the same however long the page was away. If no snapshot arrives within 10 seconds of coming back, the connection is presumed dead (for example after sleep) and replaced.
 
 ## 4. Terminal size and display model
 
@@ -391,11 +392,11 @@ When a snapshot is taken, the tracker appends the sequences that re-establish th
 ### 6.6 Features that need a secure context
 
 - **Affected features:**
-  - clipboard writes from programs (OSC 52);
-  - `navigator.clipboard`;
+  - `navigator.clipboard`, used for clipboard writes from programs (OSC 52);
   - desktop notifications;
   - PWA installation.
 - **Requirement.** These need HTTPS or localhost.
+- **OSC 52 without it.** A copy command (`execCommand("copy")`) still writes the clipboard during transient user activation, a few seconds after a key press or click. Programs that copy a mouse selection (Claude Code, Codex) answer a key press or a mouse release, so their copies work on plain HTTP; a blocked copy shows a message that suggests Shift+drag (Option on macOS), which selects in the terminal itself.
 - **On plain `http://<ip>`**, the UI lists what is disabled and how to fix it: an SSH tunnel or HTTPS.
 
 ## 7. History and revival
