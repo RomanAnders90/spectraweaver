@@ -28,7 +28,10 @@ import {
   setPassword,
   validatePassword,
 } from "./auth.ts";
+import { type AgentControlDeps, resumeAgent, stopAgent } from "./agent-control.ts";
+import { terminalText } from "./agents.ts";
 import { DaemonClient } from "./daemon-client.ts";
+import { foregroundProcess } from "./foreground.ts";
 import { MetaStore } from "./meta.ts";
 
 export interface ServerOptions {
@@ -93,6 +96,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     banner: meta.banner(session.id),
     tab: meta.tabOf(session.id),
     color: meta.colorOf(session.id, sessions.keys()),
+    stopped: meta.stopped(session.id),
   });
 
   const send = (client: Client, data: string | Uint8Array) => {
@@ -329,7 +333,66 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       case "tab-move":
         if (meta.moveTab(String(message.id), Number(message.index))) broadcastTabs();
         return;
+      case "agents-stop":
+        void runAgents(client, "stop");
+        return;
+      case "agents-resume":
+        void runAgents(client, "resume");
+        return;
     }
+  }
+
+  const agentDeps: AgentControlDeps = {
+    input: (session, data) => daemon.request({ op: "input", session, data }),
+    screenText: async (session) => terminalText((await daemon.call<Snapshot>({ op: "snapshot", session })).data),
+    foreground: foregroundProcess,
+  };
+  let agentsBusy = false;
+
+  /**
+   * Stops every coding agent (to update them), remembering how to resume each, or resumes
+   * the stopped ones. Terminals are handled in parallel; a stop takes a few seconds.
+   */
+  async function runAgents(client: Client, action: "stop" | "resume"): Promise<void> {
+    if (agentsBusy) {
+      sendJson(client, { t: "error", message: "Agents are already being stopped or resumed." });
+      return;
+    }
+    agentsBusy = true;
+    let done = 0;
+    const failed: { session: string; agent: string; reason: string }[] = [];
+    const live = [...sessions.values()].filter((session) => !session.exited);
+    await Promise.all(
+      live.map(async ({ id, pid }) => {
+        const stopped = meta.stopped(id);
+        try {
+          if (action === "stop" && !stopped) {
+            const result = await stopAgent(agentDeps, id, pid);
+            if (result.kind === "stopped") {
+              meta.setStopped(id, { agent: result.agent, command: result.command, at: Date.now() });
+              done++;
+              broadcastSession(id);
+            } else if (result.kind === "failed") {
+              failed.push({ session: id, agent: result.agent, reason: result.reason });
+            }
+          } else if (action === "resume" && stopped) {
+            const outcome = resumeAgent(agentDeps, id, pid, stopped);
+            if (outcome === "busy") {
+              failed.push({ session: id, agent: stopped.agent, reason: "something else runs in its terminal" });
+              return;
+            }
+            if (outcome === "resumed") done++;
+            meta.setStopped(id, undefined);
+            broadcastSession(id);
+          }
+        } catch (error) {
+          failed.push({ session: id, agent: stopped?.agent ?? "agent", reason: (error as Error).message });
+        }
+      }),
+    );
+    agentsBusy = false;
+    log(`agents ${action}: ${done} done, ${failed.length} failed`);
+    if (clients.has(client)) sendJson(client, { t: "agents-done", action, done, failed });
   }
 
   const isAuthed = (request: Request) => {

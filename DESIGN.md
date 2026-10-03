@@ -483,6 +483,19 @@ All integrations are opt-in, installed with `spectraweaver hooks install <agent>
 - A count in the tab title, for example "(2) SpectraWeaver".
 - Optional desktop notifications and sound (these need a secure context).
 
+### 8.5 Stopping and resuming agents
+
+Updating Claude Code or Codex means restarting every running copy, and Codex cannot be replaced while copies of it run. "Stop agents" makes every agent exit and remembers how to resume it; after the update, "Resume agents" starts each again in its terminal, on the same conversation.
+
+- **Finding agents.** The server reads the terminal's foreground process group (`tpgid` in `/proc/<shell>/stat` on Linux, `ps` elsewhere) and recognises `claude` and `codex` by their program, including npm installs run by node.
+- **Exiting.** Ctrl+C pressed twice, in up to three rounds, until the shell is back in the foreground. A first press may only interrupt a task or cancel a question, and Ctrl+C is safer than typing `/exit`, whose Enter could answer a permission question.
+- **Learning how to resume.** Both agents print it when they exit: Claude Code `Resume this session with:` and `claude --resume ID`, Codex `To continue this session, run:` and `codex resume ID`. The server reads the terminal's text (from a snapshot) before and after, and only a hint that is new counts: the screen may still show older ones, including the command that resumed this very session. An agent that exits without one (an unsaved session, say) is reported, not resumed.
+- **Keeping flags.** An allowlist per agent keeps flags such as `--dangerously-skip-permissions`, `--model` or Codex's `-c key=value`; everything else, including an initial prompt that would be sent again, is dropped.
+- **Resuming.** Ctrl+U, then the command, typed at the prompt; a terminal running something else is skipped and reported.
+- **State.** The resume command is stored with the session in `meta.json`, so it survives page reloads and server restarts, and a tile shows ⏸ while it waits.
+- **No daemon change.** Everything uses existing daemon operations (session list, input, snapshot), so restarting the server is enough to get the feature; running sessions are untouched.
+- **Agent-specific knowledge** lives in one table (`src/server/agents.ts`); a new agent is one more entry. Hooks (§8.3) would give session ids before an exit, which reviving after a reboot needs.
+
 ## 9. Security
 
 ### 9.1 Threat model

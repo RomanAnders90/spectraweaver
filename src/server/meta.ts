@@ -4,12 +4,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "../common/files.ts";
-import { GRID_PATTERN, TAB_COLORS, type TabView, TILE_COLORS } from "../common/protocol.ts";
+import { GRID_PATTERN, type StoppedAgent, TAB_COLORS, type TabView, TILE_COLORS } from "../common/protocol.ts";
 
 interface SessionMeta {
   banner?: string;
   tab?: string;
   color?: string;
+  stopped?: StoppedAgent;
 }
 
 interface MetaFile {
@@ -81,6 +82,15 @@ export class MetaStore {
     const color = this.leastUsedColor(sessionId, liveIds);
     this.patchSession(sessionId, { color });
     return color;
+  }
+
+  stopped(sessionId: string): StoppedAgent | undefined {
+    const stopped = this.data.sessions[sessionId]?.stopped;
+    return typeof stopped?.command === "string" && typeof stopped.agent === "string" ? stopped : undefined;
+  }
+
+  setStopped(sessionId: string, stopped: StoppedAgent | undefined): void {
+    this.patchSession(sessionId, { stopped });
   }
 
   /** Moves a session to a tab. It keeps its colour unless a session there already has it. */

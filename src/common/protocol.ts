@@ -81,6 +81,15 @@ export interface SessionView extends SessionInfo {
   tab: string;
   /** Tints the tile's header and outline; one of TILE_COLORS. */
   color: string;
+  /** A coding agent stopped by "Stop agents", waiting for "Resume agents". */
+  stopped?: StoppedAgent;
+}
+
+export interface StoppedAgent {
+  agent: string;
+  /** Typed at the terminal's prompt to resume it. */
+  command: string;
+  at: number;
 }
 
 export interface TabView {
@@ -123,7 +132,9 @@ export type ClientMessage =
   | { t: "tab-create"; id: string; name: string; color: string; grid: string }
   | { t: "tab-update"; id: string; name?: string; color?: string; grid?: string }
   | { t: "tab-delete"; id: string }
-  | { t: "tab-move"; id: string; index: number };
+  | { t: "tab-move"; id: string; index: number }
+  | { t: "agents-stop" }
+  | { t: "agents-resume" };
 
 export type ServerMessage =
   | { t: "hello"; version: string }
@@ -134,6 +145,12 @@ export type ServerMessage =
   | { t: "removed"; session: string }
   | { t: "snapshot"; snapshot: Snapshot }
   | { t: "bell"; session: string }
+  | {
+      t: "agents-done";
+      action: "stop" | "resume";
+      done: number;
+      failed: { session: string; agent: string; reason: string }[];
+    }
   | { t: "error"; message: string };
 
 // ---- terminal theme --------------------------------------------------------------------

@@ -93,6 +93,7 @@ Closing the browser leaves everything running. After the server reboots, run `sp
 - **Zoom a tile:** Ctrl/Cmd + `=` / `-` / `0`, or Ctrl + mouse wheel. Zoom only changes the font; 100% fills the tile.
 - **Focus one terminal:** ⤢ on its tile. ↗ opens it in its own window.
 - **Attention:** when a terminal rings the bell, its tile, its tab and the browser tab title are marked until you look at it.
+- **Updating agents:** ⏸ Stop agents makes every Claude Code and Codex session exit, as with Ctrl+C pressed twice (a task in progress is interrupted), and remembers how to resume each. Update them, then press ▶ Resume agents: each starts again in its terminal on the same conversation, keeping flags such as `--dangerously-skip-permissions` and `--model`. A tile shows ⏸ while its agent waits.
 - **Copy and paste** follow VS Code on each OS:
   - Windows: Ctrl+C copies when text is selected (otherwise it interrupts the program), and Ctrl+V pastes.
   - Linux: Ctrl+Shift+C and Ctrl+Shift+V.

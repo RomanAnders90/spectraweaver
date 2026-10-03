@@ -440,6 +440,11 @@ code {
   white-space: nowrap;
 }
 
+.badge.stopped {
+  color: #1b1b1b;
+  background: rgba(0, 0, 0, 0.16);
+}
+
 .badge.exited {
   background: #3a1d1d;
   color: var(--danger);

@@ -85,6 +85,12 @@ const gridSelect = el(
   GRID_PRESETS.map((preset) => el("option", { value: preset }, [formatGrid(parseGrid(preset)!)])),
 );
 const newButton = el("button", { class: "primary" }, ["+ New terminal"]);
+const stopAgentsButton = el(
+  "button",
+  { title: "Stop every Claude Code and Codex session, for example to update them; Resume starts each again" },
+  ["⏸ Stop agents"],
+);
+const resumeAgentsButton = el("button", { class: "primary", hidden: "" });
 const settingsButton = el("button", { class: "icon-btn settings-btn", title: "Settings" }, ["⚙"]);
 const notice = el("div", { class: "notice", hidden: "" });
 const grid = el("main", { class: "grid" });
@@ -132,14 +138,41 @@ if (!window.isSecureContext) {
       {
         class: "warning",
         title:
-          "Plain HTTP: programs cannot write to your clipboard and desktop notifications are off. " +
-          "Use an SSH tunnel to localhost or HTTPS.",
+          "Plain HTTP: programs can copy to your clipboard only right after a key press or click, and " +
+          "desktop notifications are off. An SSH tunnel to localhost, or HTTPS, lifts both limits.",
       },
       ["⚠ HTTP"],
     ),
   );
 }
-topbar.append(gridSelect, newButton, settingsButton);
+topbar.append(stopAgentsButton, resumeAgentsButton, gridSelect, newButton, settingsButton);
+
+stopAgentsButton.addEventListener("click", () => {
+  const question =
+    "Stop every Claude Code and Codex session, in all tabs?\n\n" +
+    "Each exits as with Ctrl+C pressed twice, which interrupts a task in progress. " +
+    "Update them, then press Resume to start each again in its terminal, where it left off.";
+  if (!confirm(question)) return;
+  stopAgentsButton.disabled = true;
+  toast("Stopping agents…");
+  send({ t: "agents-stop" });
+});
+resumeAgentsButton.addEventListener("click", () => {
+  resumeAgentsButton.disabled = true;
+  send({ t: "agents-resume" });
+});
+
+function updateAgentButtons(): void {
+  const stopped = [...sessions.values()].filter((session) => session.stopped).length;
+  resumeAgentsButton.hidden = stopped === 0;
+  resumeAgentsButton.textContent = `▶ Resume ${stopped} agent${stopped === 1 ? "" : "s"}`;
+  resumeAgentsButton.title = "Run each stopped agent's resume command in its terminal";
+}
+
+function nameOf(sessionId: string): string {
+  const session = sessions.get(sessionId);
+  return session?.banner || session?.title || sessionId;
+}
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 function toast(message: string): void {
@@ -251,6 +284,7 @@ class Tile {
   private readonly subtitle: HTMLSpanElement;
   private readonly size: HTMLSpanElement;
   private readonly exitBadge: HTMLSpanElement;
+  private readonly stoppedBadge: HTMLSpanElement;
   private readonly focusButton: HTMLButtonElement;
 
   constructor(session: SessionView) {
@@ -260,6 +294,7 @@ class Tile {
     this.subtitle = el("span", { class: "subtitle" });
     this.size = el("span", { class: "meta" });
     this.exitBadge = el("span", { class: "badge exited", hidden: "" });
+    this.stoppedBadge = el("span", { class: "badge stopped", hidden: "" });
     this.focusButton = el("button", { class: "icon-btn", title: "Focus this terminal" }, ["⤢"]);
     const windowButton = el("button", { class: "icon-btn", title: "Open in a new window" }, ["↗"]);
     const closeButton = el("button", { class: "icon-btn", title: "Close terminal" }, ["✕"]);
@@ -271,6 +306,7 @@ class Tile {
         this.banner,
         this.subtitle,
         this.exitBadge,
+        this.stoppedBadge,
         this.size,
         this.focusButton,
         windowButton,
@@ -344,6 +380,11 @@ class Tile {
     const exited = session.exited;
     this.exitBadge.hidden = !exited;
     if (exited) this.exitBadge.textContent = exited.signal ? `exited (${exited.signal})` : `exited ${exited.code ?? ""}`;
+    this.stoppedBadge.hidden = !session.stopped;
+    if (session.stopped) {
+      this.stoppedBadge.textContent = `⏸ ${session.stopped.agent}`;
+      this.stoppedBadge.title = `Stopped. Resume runs: ${session.stopped.command}`;
+    }
     this.focusButton.textContent = currentView().focus === session.id ? "⤡" : "⤢";
     this.root.classList.toggle("bell", belled.has(session.id));
   }
@@ -412,6 +453,7 @@ function render(): void {
     : "No terminals in this tab yet. Create one with “+ New terminal”, or drag one here onto the tab.";
   layoutGrid();
   updateWindowIdentity(view.tab);
+  updateAgentButtons();
 }
 
 // ---- connection ------------------------------------------------------------------------
@@ -439,8 +481,12 @@ function onServerMessage(message: ServerMessage): void {
       sessions.set(message.session.id, message.session);
       // Agents retitle their terminals many times a second: unless the session changed
       // tabs, only its own tile needs updating.
-      if (previous?.tab === message.session.tab) tiles.get(message.session.id)?.update(message.session);
-      else render();
+      if (previous?.tab === message.session.tab) {
+        tiles.get(message.session.id)?.update(message.session);
+        updateAgentButtons();
+      } else {
+        render();
+      }
       return;
     }
     case "removed":
@@ -456,7 +502,26 @@ function onServerMessage(message: ServerMessage): void {
       belled.add(message.session);
       render();
       return;
+    case "agents-done": {
+      stopAgentsButton.disabled = false;
+      resumeAgentsButton.disabled = false;
+      const stop = message.action === "stop";
+      const count = `${message.done} agent${message.done === 1 ? "" : "s"}`;
+      let text =
+        message.done === 0 && message.failed.length === 0
+          ? stop
+            ? "No Claude Code or Codex session is running."
+            : "Nothing to resume."
+          : `${stop ? "Stopped" : "Resumed"} ${count}.`;
+      for (const failure of message.failed) {
+        text += ` Not ${stop ? "stopped" : "resumed"}: ${nameOf(failure.session)} (${failure.agent}), ${failure.reason}.`;
+      }
+      toast(text);
+      return;
+    }
     case "error":
+      stopAgentsButton.disabled = false;
+      resumeAgentsButton.disabled = false;
       toast(message.message);
       return;
   }
@@ -477,6 +542,9 @@ function connect(): void {
   ws.addEventListener("open", () => {
     if (ws !== current) return ws.close();
     socket = ws;
+    // A stop or resume that was under way when the connection dropped will not report back.
+    stopAgentsButton.disabled = false;
+    resumeAgentsButton.disabled = false;
     connected = true;
     reconnectDelay = 250;
     setStatus();
