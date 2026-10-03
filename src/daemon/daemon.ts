@@ -6,7 +6,7 @@ import type { Socket } from "bun";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { networkFilesystem } from "../common/files.ts";
 import { ensurePrivateDir, type Paths } from "../common/paths.ts";
 import {
@@ -284,17 +284,26 @@ function listenUnix(
   }
 }
 
-function defaultShellArgv(): string[] {
-  let shell = process.env.SHELL;
-  if (!shell) {
-    try {
-      shell = userInfo().shell ?? undefined;
-    } catch {
-      shell = undefined;
-    }
+/**
+ * The command line for new sessions, as VS Code's terminal starts shells. On Linux, bash
+ * starts as an ordinary interactive shell: a login bash reads only ~/.bash_profile or
+ * ~/.profile, many of which (company ones especially) never source ~/.bashrc, where aliases
+ * and functions live. It inherits the profile's environment (PATH and so on) from the daemon,
+ * which `up` starts from the user's own session. Other shells, and bash on macOS where
+ * profiles hold the aliases, start as login shells, which read the user's rc files too.
+ */
+export function defaultShellArgv(shell = userShell(), platform: string = process.platform): string[] {
+  if (platform !== "darwin" && basename(shell) === "bash") return [shell];
+  return [shell, "-l"];
+}
+
+/** $SHELL, else the passwd entry: systemd services may not set SHELL. */
+function userShell(): string {
+  try {
+    return process.env.SHELL || userInfo().shell || "/bin/sh";
+  } catch {
+    return "/bin/sh";
   }
-  // A login shell loads the user's profile, which also fixes the minimal PATH systemd gives services.
-  return [shell || "/bin/sh", "-l"];
 }
 
 function resolveCwd(requested: string | undefined): string {

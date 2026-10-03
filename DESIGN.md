@@ -244,8 +244,11 @@ Nothing a viewer does sends a resize to the PTY:
 
 ### 5.1 Spawning
 
-- **API.** `Bun.spawn([shell, "-l"], { cwd, env, terminal: { cols, rows, data } })`, which needs Bun 1.3.5 or later.
-- **Shell.** `$SHELL`, falling back to the passwd entry, because systemd services may not set `SHELL`. A login shell loads the user's profile, which also fixes the minimal `PATH` that systemd gives services.
+- **API.** `Bun.spawn(argv, { cwd, env, terminal: { cols, rows, data } })`, which needs Bun 1.3.5 or later.
+- **Shell.** `$SHELL`, falling back to the passwd entry, because systemd services may not set `SHELL`. It starts the way VS Code's terminal starts it:
+  - bash on Linux as an ordinary interactive shell, because a login bash reads only `~/.bash_profile` or `~/.profile`, many of which (company ones especially) never source `~/.bashrc`, where aliases and functions live. It inherits the profile's environment from the daemon, which `up` starts from the user's session;
+  - other shells, and bash on macOS, as login shells (`-l`), which read the user's rc files too.
+  A future systemd service has to import the user's environment, since services get a minimal `PATH`.
 - **Startup command.** An optional startup command, such as `claude`, is sent to the interactive shell as type-ahead input, like VS Code's `sendText`. When the command exits, the user is back at a prompt, and the command is in shell history.
 - **Environment added:**
   - `TERM=xterm-256color`, `COLORTERM=truecolor`
