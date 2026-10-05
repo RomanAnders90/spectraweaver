@@ -175,12 +175,13 @@ function selfArgv(args: string[]): string[] {
 // import bundles src/web/index.html at startup and writes the chunk URLs into the page relative to the
 // process's working directory, so a server started from a directory that is not an ancestor of the checkout
 // (a home directory on another mount) serves a page whose script and stylesheet are 404 -- a blank screen.
+// cmdServer moves there, however the server was started. A compiled binary has no checkout.
 function checkoutDir(): string | undefined {
   const dir = resolve(import.meta.dir, "..");
   return existsSync(join(dir, "package.json")) ? dir : undefined;
 }
 
-function spawnDetached(argv: string[], logFile: string, cwd: string = homedir()): void {
+function spawnDetached(argv: string[], logFile: string): void {
   // Keep logs small: home directories are often tiny.
   if ((statSync(logFile, { throwIfNoEntry: false })?.size ?? 0) > MAX_LOG_BYTES) {
     renameSync(logFile, `${logFile}.1`);
@@ -191,7 +192,7 @@ function spawnDetached(argv: string[], logFile: string, cwd: string = homedir())
   const child = spawn(argv[0]!, argv.slice(1), {
     detached: true,
     stdio: ["ignore", out, out],
-    cwd,
+    cwd: homedir(),
     env: process.env,
   });
   child.unref();
@@ -351,7 +352,6 @@ async function cmdUp(args: string[]): Promise<void> {
     spawnDetached(
       selfArgv(["server", "--port", String(port), "--host", host, ...remote, ...allow]),
       paths.serverLog,
-      checkoutDir() ?? homedir(),
     );
     if (!(await waitFor(() => isOwnServer(url), 10_000))) {
       fail(`the server did not start; see ${paths.serverLog}`);
@@ -558,6 +558,9 @@ async function cmdServer(args: string[]): Promise<void> {
   const flags = parseFlags(args, ["port", "host", "allow-host", "allow-remote"]);
   migrateOlderState(resolvePaths());
   const paths = resolvePaths();
+  // Paths are resolved first, against the directory the command ran in.
+  const checkout = checkoutDir();
+  if (checkout) process.chdir(checkout);
   const instance = loadInstance(paths);
   const host = flag(flags, "host") ?? instance.host ?? DEFAULT_HOST;
   checkRemoteExposure(host, flag(flags, "allow-remote") !== undefined || instance.host === host);
