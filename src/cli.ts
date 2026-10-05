@@ -171,7 +171,16 @@ function selfArgv(args: string[]): string[] {
   return compiled ? [process.execPath, ...args] : [process.execPath, Bun.main, ...args];
 }
 
-function spawnDetached(argv: string[], logFile: string): void {
+// The directory this checkout lives in (src/cli.ts -> ..). The web server must run from here: Bun's HTML
+// import bundles src/web/index.html at startup and writes the chunk URLs into the page relative to the
+// process's working directory, so a server started from a directory that is not an ancestor of the checkout
+// (a home directory on another mount) serves a page whose script and stylesheet are 404 -- a blank screen.
+function checkoutDir(): string | undefined {
+  const dir = resolve(import.meta.dir, "..");
+  return existsSync(join(dir, "package.json")) ? dir : undefined;
+}
+
+function spawnDetached(argv: string[], logFile: string, cwd: string = homedir()): void {
   // Keep logs small: home directories are often tiny.
   if ((statSync(logFile, { throwIfNoEntry: false })?.size ?? 0) > MAX_LOG_BYTES) {
     renameSync(logFile, `${logFile}.1`);
@@ -182,7 +191,7 @@ function spawnDetached(argv: string[], logFile: string): void {
   const child = spawn(argv[0]!, argv.slice(1), {
     detached: true,
     stdio: ["ignore", out, out],
-    cwd: homedir(),
+    cwd,
     env: process.env,
   });
   child.unref();
@@ -342,6 +351,7 @@ async function cmdUp(args: string[]): Promise<void> {
     spawnDetached(
       selfArgv(["server", "--port", String(port), "--host", host, ...remote, ...allow]),
       paths.serverLog,
+      checkoutDir() ?? homedir(),
     );
     if (!(await waitFor(() => isOwnServer(url), 10_000))) {
       fail(`the server did not start; see ${paths.serverLog}`);
